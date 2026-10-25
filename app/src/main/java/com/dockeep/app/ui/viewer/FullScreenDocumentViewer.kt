@@ -61,6 +61,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import kotlin.math.min
 import kotlin.math.max
 
 private const val MinZoom = 1f
@@ -265,8 +266,10 @@ private fun renderPdfPage(file: File, pageIndex: Int, scale: Float): Bitmap? = r
         PdfRenderer(pfd).use { renderer ->
             val index = pageIndex.coerceIn(0, renderer.pageCount - 1)
             renderer.openPage(index).use { page ->
-                val width = (page.width * scale).toInt().coerceAtLeast(1)
-                val height = (page.height * scale).toInt().coerceAtLeast(1)
+                // Cap the longest edge so oversized pages (posters, plans) don't exhaust memory.
+                val fitted = min(scale, MaxPdfRenderEdge / max(page.width, page.height).coerceAtLeast(1).toFloat())
+                val width = (page.width * fitted).toInt().coerceAtLeast(1)
+                val height = (page.height * fitted).toInt().coerceAtLeast(1)
                 Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also { bitmap ->
                     bitmap.eraseColor(android.graphics.Color.WHITE)
                     page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
@@ -275,3 +278,5 @@ private fun renderPdfPage(file: File, pageIndex: Int, scale: Float): Bitmap? = r
         }
     }
 }.getOrNull()
+
+private const val MaxPdfRenderEdge = 3000f

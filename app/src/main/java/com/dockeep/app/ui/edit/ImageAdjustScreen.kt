@@ -46,6 +46,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -79,6 +80,24 @@ sealed class ImageEditSource {
     data class FromUri(val uri: Uri) : ImageEditSource()
 }
 
+/** Lets the crop screen survive rotation and the app being killed while the camera is open. */
+val ImageEditSourceSaver: Saver<ImageEditSource?, String> = Saver(
+    save = { source ->
+        when (source) {
+            is ImageEditSource.FromFile -> "file:" + source.file.absolutePath
+            is ImageEditSource.FromUri -> "uri:" + source.uri
+            null -> null
+        }
+    },
+    restore = { saved ->
+        when {
+            saved.startsWith("file:") -> ImageEditSource.FromFile(File(saved.removePrefix("file:")))
+            saved.startsWith("uri:") -> ImageEditSource.FromUri(Uri.parse(saved.removePrefix("uri:")))
+            else -> null
+        }
+    }
+)
+
 private enum class CropHandle { None, Move, TL, TR, BL, BR, L, T, R, B }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -94,6 +113,7 @@ fun ImageAdjustScreen(
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
     var loading by remember { mutableStateOf(true) }
     var saving by remember { mutableStateOf(false) }
+    var failed by remember { mutableStateOf<String?>(null) }
     var aspect by remember { mutableStateOf(CropAspect.FREE) }
     var crop by remember { mutableStateOf(Rect.Zero) }
     var imageRect by remember { mutableStateOf(Rect.Zero) }
@@ -106,12 +126,14 @@ fun ImageAdjustScreen(
 
     LaunchedEffect(source) {
         loading = true
+        failed = null
         bitmap = withContext(Dispatchers.IO) {
             when (source) {
                 is ImageEditSource.FromFile -> ImageEditing.decode(source.file)
                 is ImageEditSource.FromUri -> ImageEditing.decode(context, source.uri)
             }
         }
+        if (bitmap == null) failed = "Couldn’t open this photo. Go back and try another one."
         loading = false
     }
 
@@ -156,20 +178,30 @@ fun ImageAdjustScreen(
                             saving = true
                             scope.launch {
                                 val file = withContext(Dispatchers.IO) {
-                                    val mapped = mapCropToBitmap(crop, imageRect, image.width, image.height)
-                                    val cropped = ImageEditing.crop(
-                                        image,
-                                        mapped.left,
-                                        mapped.top,
-                                        mapped.right,
-                                        mapped.bottom
-                                    )
-                                    val dest = createOutputFile()
-                                    ImageEditing.saveJpeg(cropped, dest)
-                                    dest
+                                    try {
+                                        val mapped = mapCropToBitmap(crop, imageRect, image.width, image.height)
+                                        val cropped = ImageEditing.crop(
+                                            image,
+                                            mapped.left,
+                                            mapped.top,
+                                            mapped.right,
+                                            mapped.bottom
+                                        )
+                                        val dest = createOutputFile()
+                                        ImageEditing.saveJpeg(cropped, dest)
+                                        dest.takeIf { it.length() > 0L }
+                                    } catch (_: Exception) {
+                                        null
+                                    } catch (_: OutOfMemoryError) {
+                                        null
+                                    }
                                 }
                                 saving = false
-                                onConfirm(file)
+                                if (file != null) {
+                                    onConfirm(file)
+                                } else {
+                                    failed = "Couldn’t save the photo. Free up some space and try again."
+                                }
                             }
                         }
                     ) {
@@ -197,6 +229,15 @@ fun ImageAdjustScreen(
                 .padding(padding)
                 .background(Color.Black)
         ) {
+            val saveError = failed
+            if (saveError != null && bitmap != null) {
+                Text(
+                    saveError,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+            }
             BoxWithConstraints(
                 modifier = Modifier
                     .weight(1f)
@@ -204,7 +245,12 @@ fun ImageAdjustScreen(
                     .onSizeChanged { canvasSize = it }
             ) {
                 val image = bitmap
-                if (loading || image == null) {
+                val error = failed
+                if (error != null && image == null) {
+                    Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+                        Text(error, color = Color.White, style = MaterialTheme.typography.bodyLarge)
+                    }
+                } else if (loading || image == null) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator(color = Color.White)
                     }
@@ -268,7 +314,7 @@ fun ImageAdjustScreen(
                 ) {
                     Button(
                         onClick = {
-                            bitmap = bitmap?.let { ImageEditing.rotate(it, -90) }
+                            bitmap = bitmap?.let { ImageEditing.rotateOrSame(it, -90) }
                         },
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(14.dp)
@@ -279,7 +325,7 @@ fun ImageAdjustScreen(
                     }
                     Button(
                         onClick = {
-                            bitmap = bitmap?.let { ImageEditing.rotate(it, 90) }
+                            bitmap = bitmap?.let { ImageEditing.rotateOrSame(it, 90) }
                         },
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(14.dp)

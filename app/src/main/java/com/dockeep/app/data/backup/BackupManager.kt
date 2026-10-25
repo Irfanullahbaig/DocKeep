@@ -7,12 +7,15 @@ import com.dockeep.app.data.local.CategoryEntity
 import com.dockeep.app.data.local.DocumentEntity
 import com.dockeep.app.data.repository.DocumentRepository
 import com.dockeep.app.data.storage.LocalFileStorage
+import com.dockeep.app.data.storage.isInside
+import com.dockeep.app.domain.DefaultCategory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
+import java.io.File
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
@@ -53,43 +56,66 @@ class BackupManager(
     }
 
     suspend fun restoreFrom(uri: Uri) = withContext(Dispatchers.IO) {
-        var payload: BackupPayload? = null
-        val extracted = mutableMapOf<String, ByteArray>()
-        context.contentResolver.openInputStream(uri)?.use { raw ->
-            ZipInputStream(BufferedInputStream(raw)).use { zip ->
-                var entry = zip.nextEntry
-                while (entry != null) {
-                    if (!entry.isDirectory) {
-                        val bytes = zip.readBytes()
-                        when {
-                            entry.name.endsWith("dockeep-backup.json") -> {
-                                payload = json.decodeFromString(BackupPayload.serializer(), bytes.decodeToString())
-                            }
-                            entry.name.startsWith("files/") -> {
-                                extracted[entry.name.removePrefix("files/")] = bytes
+        // Unpack to a staging folder first (streamed, so large backups don't run out of memory)
+        // and only replace the current library once the backup has been read successfully.
+        val staging = File(context.cacheDir, "restore").apply {
+            deleteRecursively()
+            mkdirs()
+        }
+        try {
+            var payload: BackupPayload? = null
+            context.contentResolver.openInputStream(uri)?.use { raw ->
+                ZipInputStream(BufferedInputStream(raw)).use { zip ->
+                    var entry = zip.nextEntry
+                    while (entry != null) {
+                        if (!entry.isDirectory) {
+                            when {
+                                entry.name.endsWith("dockeep-backup.json") -> {
+                                    payload = json.decodeFromString(
+                                        BackupPayload.serializer(),
+                                        zip.readBytes().decodeToString()
+                                    )
+                                }
+                                entry.name.startsWith("files/") -> {
+                                    val dest = File(staging, entry.name.removePrefix("files/"))
+                                    if (isInside(staging, dest)) {
+                                        dest.parentFile?.mkdirs()
+                                        dest.outputStream().use { zip.copyTo(it) }
+                                    }
+                                }
                             }
                         }
+                        zip.closeEntry()
+                        entry = zip.nextEntry
                     }
-                    zip.closeEntry()
-                    entry = zip.nextEntry
                 }
-            }
-        } ?: error("Could not read the backup file.")
+            } ?: error("Could not read the backup file.")
 
-        val backup = payload ?: error("This file is not a valid DocKeep backup.")
-        storage.deleteAllDocuments()
-        backup.documents.forEach { document ->
-            val bytes = extracted[document.relativePath] ?: return@forEach
-            val dest = storage.fileFor(document.relativePath)
-            dest.parentFile?.mkdirs()
-            dest.writeBytes(bytes)
+            val backup = payload ?: error("This file is not a valid DocKeep backup.")
+            val categories = (backup.categories.map { it.toEntity() } + AppDatabase.defaultCategories())
+                .distinctBy { it.id }
+            val categoryIds = categories.map { it.id }.toSet()
+            val documents = backup.documents
+                .filter { storage.isSafeRelativePath(it.relativePath) }
+                .map { document ->
+                    val entity = document.toEntity()
+                    if (entity.categoryId in categoryIds) entity else entity.copy(categoryId = DefaultCategory.default.id)
+                }
+
+            storage.deleteAllDocuments()
+            documents.forEach { document ->
+                val source = File(staging, document.relativePath)
+                if (!isInside(staging, source) || !source.exists()) return@forEach
+                val dest = storage.fileFor(document.relativePath)
+                dest.parentFile?.mkdirs()
+                if (!source.renameTo(dest)) source.copyTo(dest, overwrite = true)
+            }
+            repository.restore(categories = categories, documents = documents)
+            repository.seedIfNeeded()
+            storage.ensureCategoryFolders()
+        } finally {
+            staging.deleteRecursively()
         }
-        repository.restore(
-            categories = backup.categories.map { it.toEntity() }.ifEmpty { AppDatabase.defaultCategories() },
-            documents = backup.documents.map { it.toEntity() }
-        )
-        repository.seedIfNeeded()
-        storage.ensureCategoryFolders()
     }
 }
 

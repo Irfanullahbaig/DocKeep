@@ -1,7 +1,6 @@
 package com.dockeep.app.ui.settings
 
 import android.Manifest
-import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -46,6 +45,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.dockeep.app.ui.LocalAppContainer
+import com.dockeep.app.ui.components.launchExternal
 import com.dockeep.app.domain.AutoLockTimeout
 import com.dockeep.app.domain.ThemeMode
 import com.dockeep.app.notifications.ExpiryNotifications
@@ -66,6 +67,7 @@ fun SettingsScreen(
     val snackbar = remember { SnackbarHostState() }
     var confirmDelete by remember { mutableStateOf(false) }
     var confirmRestore by remember { mutableStateOf<Uri?>(null) }
+    val lock = LocalAppContainer.current.appLockController
 
     val export = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
         if (uri != null) viewModel.exportBackup(uri)
@@ -198,14 +200,20 @@ fun SettingsScreen(
                         leadingContent = { androidx.compose.material3.Icon(Icons.Rounded.CloudUpload, contentDescription = null) },
                         modifier = Modifier.clickable {
                             val name = "DocKeep-backup-${LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE)}.zip"
-                            export.launch(name)
+                            lock.launchExternal(viewModel::showMessage, "No file manager was found on this phone.") {
+                                export.launch(name)
+                            }
                         }
                     )
                     ListItem(
                         headlineContent = { Text("Restore backup") },
                         supportingContent = { Text("Replace local documents from a DocKeep zip") },
                         leadingContent = { androidx.compose.material3.Icon(Icons.Rounded.CloudDownload, contentDescription = null) },
-                        modifier = Modifier.clickable { restore.launch(arrayOf("application/zip", "*/*")) }
+                        modifier = Modifier.clickable {
+                            lock.launchExternal(viewModel::showMessage, "No file manager was found on this phone.") {
+                                restore.launch(arrayOf("application/zip", "*/*"))
+                            }
+                        }
                     )
                     ListItem(
                         headlineContent = { Text("Delete all documents") },
@@ -223,8 +231,11 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 TextButton(onClick = {
-                    val activity = context as? Activity
-                    activity?.startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS))
+                    lock.launchExternal(viewModel::showMessage, "This phone doesn’t have a screen lock settings page.") {
+                        context.startActivity(
+                            Intent(Settings.ACTION_SECURITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                    }
                 }) { Text("Open device screen lock settings") }
                 Spacer(Modifier.height(48.dp))
             }

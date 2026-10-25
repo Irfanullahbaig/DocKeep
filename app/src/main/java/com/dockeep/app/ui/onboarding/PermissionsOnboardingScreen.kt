@@ -67,13 +67,13 @@ fun PermissionsOnboardingScreen(
         PermissionRow(
             icon = Icons.Rounded.CameraAlt,
             title = "Camera",
-            body = "Scan documents and take photos of IDs, cards, and papers."
+            body = "Opens your camera app to scan IDs, cards, and papers. Photos go straight into DocKeep."
         )
         Spacer(Modifier.height(12.dp))
         PermissionRow(
             icon = Icons.Rounded.Folder,
             title = "Photos & storage",
-            body = "Upload images and PDFs from your gallery or files."
+            body = "Pick images and PDFs with Android’s picker. DocKeep only sees the files you choose."
         )
         Spacer(Modifier.height(12.dp))
         PermissionRow(

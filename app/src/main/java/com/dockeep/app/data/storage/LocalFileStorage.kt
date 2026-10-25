@@ -36,6 +36,20 @@ class LocalFileStorage(private val context: Context) {
 
     fun fileFor(relativePath: String): File = File(documentsRoot, relativePath)
 
+    /** True when the path stays inside DocKeep's documents folder (guards against "../" in backups). */
+    fun isSafeRelativePath(relativePath: String): Boolean =
+        relativePath.isNotBlank() && isInside(documentsRoot, File(documentsRoot, relativePath))
+
+    /** Deletes leftover camera shots and crop edits older than a day; they're copies of documents. */
+    fun clearStaleTemps(maxAgeMillis: Long = 24 * 60 * 60_000L) {
+        val cutoff = System.currentTimeMillis() - maxAgeMillis
+        listOf("captures", "edits", "imports", "restore").forEach { name ->
+            File(context.cacheDir, name).listFiles()?.forEach { file ->
+                if (file.lastModified() < cutoff) runCatching { file.deleteRecursively() }
+            }
+        }
+    }
+
     fun createCaptureFile(): File {
         val dir = File(context.cacheDir, "captures").apply { mkdirs() }
         return File(dir, "capture_${UUID.randomUUID()}.jpg").apply { createNewFile() }
@@ -140,3 +154,8 @@ data class ImportedFile(
     val mimeType: String,
     val fileType: FileType
 )
+
+internal fun isInside(root: File, candidate: File): Boolean {
+    val rootPath = root.canonicalPath + File.separator
+    return candidate.canonicalPath.startsWith(rootPath)
+}

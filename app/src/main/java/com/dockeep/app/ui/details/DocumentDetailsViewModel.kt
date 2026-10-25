@@ -41,6 +41,9 @@ class DocumentDetailsViewModel(
     val deleted: StateFlow<Boolean> = _uiState.map { it.deleted }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
+    fun showError(message: String) = _uiState.update { it.copy(error = message) }
+    fun clearError() = _uiState.update { it.copy(error = null) }
+
     fun fileFor(document: DocumentItem): File = storage.fileFor(document.relativePath)
 
     fun replaceFile(uri: Uri, mime: String?) {
@@ -72,6 +75,7 @@ class DocumentDetailsViewModel(
                     mimeType = "image/jpeg"
                 )
                 repository.replaceFile(documentId, imported)
+                file.delete()
             }.onFailure { error ->
                 _uiState.update { it.copy(error = error.message ?: "Could not replace the file.") }
             }

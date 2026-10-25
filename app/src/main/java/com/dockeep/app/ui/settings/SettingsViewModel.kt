@@ -123,4 +123,5 @@ class SettingsViewModel(
     }
 
     fun consumeMessage() = _uiState.update { it.copy(message = null) }
+    fun showMessage(message: String) = _uiState.update { it.copy(message = message) }
 }

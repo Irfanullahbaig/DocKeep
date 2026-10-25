@@ -21,6 +21,7 @@ class DocKeepApplication : Application() {
         runCatching { ExpiryNotifications.ensureChannel(this) }
         applicationScope.launch {
             runCatching { container.documentRepository.seedIfNeeded() }
+            runCatching { container.fileStorage.clearStaleTemps() }
             runCatching {
                 val settings = container.settingsRepository.settings.first()
                 if (settings.expiryNotificationsEnabled) {

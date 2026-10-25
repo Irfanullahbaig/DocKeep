@@ -7,16 +7,10 @@ import android.os.Build
 import androidx.core.content.ContextCompat
 
 object AppPermissions {
-    fun required(): Array<String> {
-        val permissions = mutableListOf(Manifest.permission.CAMERA)
-        if (Build.VERSION.SDK_INT >= 33) {
-            permissions += Manifest.permission.READ_MEDIA_IMAGES
-            permissions += Manifest.permission.POST_NOTIFICATIONS
-        } else {
-            permissions += Manifest.permission.READ_EXTERNAL_STORAGE
-        }
-        return permissions.toTypedArray()
-    }
+    // Camera and file access go through system apps and pickers, so the only runtime permission
+    // DocKeep asks for is notifications (Android 13+) for expiry reminders.
+    fun required(): Array<String> =
+        if (Build.VERSION.SDK_INT >= 33) arrayOf(Manifest.permission.POST_NOTIFICATIONS) else emptyArray()
 
     fun missing(context: Context): Array<String> =
         required().filter { permission ->

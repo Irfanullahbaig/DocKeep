@@ -37,6 +37,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -47,6 +49,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -68,6 +71,10 @@ import com.dockeep.app.ui.components.PdfFirstPage
 import com.dockeep.app.ui.components.SoftCard
 import com.dockeep.app.ui.edit.ImageAdjustScreen
 import com.dockeep.app.ui.edit.ImageEditSource
+import com.dockeep.app.ui.edit.ImageEditSourceSaver
+import com.dockeep.app.ui.LocalAppContainer
+import com.dockeep.app.ui.components.launchExternal
+import com.dockeep.app.ui.components.rememberCameraCapture
 import com.dockeep.app.ui.viewer.FullScreenDocumentViewer
 import com.dockeep.app.util.toDisplayDate
 
@@ -85,17 +92,19 @@ fun DocumentDetailsScreen(
     var confirmDelete by remember { mutableStateOf(false) }
     var replaceSheet by remember { mutableStateOf(false) }
     var fullscreen by remember { mutableStateOf(false) }
-    var adjustSource by remember { mutableStateOf<ImageEditSource?>(null) }
-    val captureFile = remember { storage.createCaptureFile() }
-    val captureUri = remember(captureFile) {
-        FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", captureFile)
+    var adjustSource by rememberSaveable(stateSaver = ImageEditSourceSaver) {
+        mutableStateOf<ImageEditSource?>(null)
     }
-    val takePicture = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
-        if (success && captureFile.exists()) {
+    val snackbar = remember { SnackbarHostState() }
+    val lock = LocalAppContainer.current.appLockController
+    val takePicture = rememberCameraCapture(
+        storage = storage,
+        onCaptured = {
             replaceSheet = false
-            adjustSource = ImageEditSource.FromFile(captureFile)
-        }
-    }
+            adjustSource = ImageEditSource.FromFile(it)
+        },
+        onError = viewModel::showError
+    )
     val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) {
             replaceSheet = false
@@ -108,6 +117,12 @@ fun DocumentDetailsScreen(
     }
 
     LaunchedEffect(details.deleted) { if (details.deleted) onBack() }
+    LaunchedEffect(details.error) {
+        details.error?.let {
+            snackbar.showSnackbar(it)
+            viewModel.clearError()
+        }
+    }
 
     val pendingAdjust = adjustSource
     if (pendingAdjust != null) {
@@ -125,6 +140,7 @@ fun DocumentDetailsScreen(
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 title = { Text(document?.name ?: "Document") },
@@ -207,7 +223,11 @@ fun DocumentDetailsScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 FilledTonalButton(
-                    onClick = { share(context, file, current) },
+                    onClick = {
+                        lock.launchExternal(viewModel::showError, "No app on this phone can share this file.") {
+                            share(context, file, current)
+                        }
+                    },
                     modifier = Modifier.weight(1f)
                 ) {
                     Icon(Icons.Rounded.IosShare, contentDescription = null)
@@ -266,9 +286,17 @@ fun DocumentDetailsScreen(
         ) {
             Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Replace file", style = MaterialTheme.typography.titleLarge)
-                TextButton(onClick = { takePicture.launch(captureUri) }) { Text("Scan or take photo") }
-                TextButton(onClick = { pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) { Text("Upload image") }
-                TextButton(onClick = { pickPdf.launch("application/pdf") }) { Text("Upload PDF") }
+                TextButton(onClick = takePicture) { Text("Scan or take photo") }
+                TextButton(onClick = {
+                    lock.launchExternal(viewModel::showError) {
+                        pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                    }
+                }) { Text("Upload image") }
+                TextButton(onClick = {
+                    lock.launchExternal(viewModel::showError, "No file manager was found on this phone.") {
+                        pickPdf.launch("application/pdf")
+                    }
+                }) { Text("Upload PDF") }
                 Spacer(Modifier.height(12.dp))
             }
         }
@@ -329,7 +357,7 @@ private fun MetaRow(label: String, value: String) {
 }
 
 private fun share(context: android.content.Context, file: java.io.File, document: DocumentItem) {
-    if (!file.exists()) return
+    if (!file.exists()) throw IllegalStateException("File missing")
     val uri: Uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
     val intent = Intent(Intent.ACTION_SEND).apply {
         type = document.mimeType

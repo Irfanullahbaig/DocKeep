@@ -52,15 +52,14 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.dockeep.app.data.storage.LocalFileStorage
@@ -69,7 +68,11 @@ import com.dockeep.app.domain.DefaultCategory
 import com.dockeep.app.domain.DocumentGroup
 import com.dockeep.app.ui.components.PdfFirstPage
 import com.dockeep.app.ui.edit.ImageAdjustScreen
+import com.dockeep.app.ui.LocalAppContainer
+import com.dockeep.app.ui.components.launchExternal
+import com.dockeep.app.ui.components.rememberCameraCapture
 import com.dockeep.app.ui.edit.ImageEditSource
+import com.dockeep.app.ui.edit.ImageEditSourceSaver
 import com.dockeep.app.util.toDisplayDate
 import java.io.File
 
@@ -82,19 +85,17 @@ fun AddDocumentScreen(
     onSaved: () -> Unit
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    val context = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
-    val captureFile = remember { storage.createCaptureFile() }
-    val captureUri = remember(captureFile) {
-        FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", captureFile)
+    val lock = LocalAppContainer.current.appLockController
+    var adjustSource by rememberSaveable(stateSaver = ImageEditSourceSaver) {
+        mutableStateOf<ImageEditSource?>(null)
     }
-    var adjustSource by remember { mutableStateOf<ImageEditSource?>(null) }
 
-    val takePicture = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
-        if (success && captureFile.exists()) {
-            adjustSource = ImageEditSource.FromFile(captureFile)
-        }
-    }
+    val takePicture = rememberCameraCapture(
+        storage = storage,
+        onCaptured = { adjustSource = ImageEditSource.FromFile(it) },
+        onError = viewModel::showError
+    )
     val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) adjustSource = ImageEditSource.FromUri(uri)
     }
@@ -147,10 +148,18 @@ fun AddDocumentScreen(
         ) { showForm ->
             if (!showForm) {
                 SourcePicker(
-                    onScan = { takePicture.launch(captureUri) },
-                    onPhoto = { takePicture.launch(captureUri) },
-                    onImage = { pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-                    onPdf = { pickPdf.launch("application/pdf") }
+                    onScan = takePicture,
+                    onPhoto = takePicture,
+                    onImage = {
+                        lock.launchExternal(viewModel::showError) {
+                            pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        }
+                    },
+                    onPdf = {
+                        lock.launchExternal(viewModel::showError, "No file manager was found on this phone.") {
+                            pickPdf.launch("application/pdf")
+                        }
+                    }
                 )
             } else {
                 DocumentForm(

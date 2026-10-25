@@ -124,6 +124,9 @@ class AppLockController {
     @Volatile
     private var lastBackgroundAt: Long? = null
 
+    @Volatile
+    private var externalActivityStartedAt: Long? = null
+
     fun markUnlocked() {
         unlockedInSession = true
         lastBackgroundAt = null
@@ -134,6 +137,19 @@ class AppLockController {
         lastBackgroundAt = System.currentTimeMillis()
     }
 
+    /**
+     * Call right before DocKeep opens the camera, a file picker, the share sheet or system
+     * settings. Leaving for one of those doesn't count as backgrounding, so the app doesn't
+     * lock (and throw away the screen waiting for the result) while the user takes a photo.
+     */
+    fun expectExternalActivity() {
+        externalActivityStartedAt = System.currentTimeMillis()
+    }
+
+    fun cancelExternalActivity() {
+        externalActivityStartedAt = null
+    }
+
     fun onBackground() {
         lastBackgroundAt = System.currentTimeMillis()
     }
@@ -141,6 +157,14 @@ class AppLockController {
     fun shouldLock(settings: AppSettings): Boolean {
         if (!settings.appLockEnabled) return false
         if (!unlockedInSession) return true
+        val external = externalActivityStartedAt
+        if (external != null) {
+            externalActivityStartedAt = null
+            if (System.currentTimeMillis() - external < ExternalActivityGraceMillis) {
+                lastBackgroundAt = null
+                return false
+            }
+        }
         return when (settings.autoLockTimeout) {
             AutoLockTimeout.NEVER -> false
             AutoLockTimeout.IMMEDIATE -> lastBackgroundAt != null
@@ -151,3 +175,5 @@ class AppLockController {
         }
     }
 }
+
+private const val ExternalActivityGraceMillis = 10 * 60_000L

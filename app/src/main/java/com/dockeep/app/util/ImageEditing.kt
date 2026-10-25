@@ -4,27 +4,53 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
-import android.media.ExifInterface
 import android.net.Uri
+import androidx.exifinterface.media.ExifInterface
 import java.io.File
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
 object ImageEditing {
-    private const val MaxSide = 3000
+    // Big enough to keep small print readable, small enough not to run low-end phones out of
+    // memory (a 2400px ARGB bitmap is ~17 MB, and rotating briefly needs two of them).
+    private const val MaxSide = 2400
 
-    fun decode(context: Context, uri: Uri): Bitmap? {
-        val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return null
-        val orientation = bytes.inputStream().use { ExifInterface(it) }.rotationDegrees()
-        return decodeBytes(bytes, orientation)
+    /** Returns null instead of throwing when the image can't be read or the phone is low on memory. */
+    fun decode(context: Context, uri: Uri): Bitmap? = safely {
+        val resolver = context.contentResolver
+        val orientation = runCatching {
+            resolver.openInputStream(uri)?.use { ExifInterface(it).rotationDegrees() }
+        }.getOrNull() ?: 0
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        val boundsStream = resolver.openInputStream(uri) ?: return@safely null
+        boundsStream.use { BitmapFactory.decodeStream(it, null, bounds) }
+        val options = BitmapFactory.Options().apply { inSampleSize = sampleFor(bounds) }
+        val bitmap = resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
+            ?: return@safely null
+        uprighted(bitmap, orientation)
     }
 
-    fun decode(file: File): Bitmap? {
-        if (!file.exists()) return null
+    fun decode(file: File): Bitmap? = safely {
+        if (!file.exists() || file.length() == 0L) return@safely null
         val orientation = runCatching { ExifInterface(file.absolutePath).rotationDegrees() }.getOrDefault(0)
-        val bytes = file.readBytes()
-        return decodeBytes(bytes, orientation)
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.absolutePath, bounds)
+        val options = BitmapFactory.Options().apply { inSampleSize = sampleFor(bounds) }
+        val bitmap = BitmapFactory.decodeFile(file.absolutePath, options) ?: return@safely null
+        uprighted(bitmap, orientation)
+    }
+
+    /** Rotates, or keeps the original if there isn't enough memory for the rotated copy. */
+    fun rotateOrSame(bitmap: Bitmap, degrees: Int): Bitmap {
+        if (degrees % 360 == 0) return bitmap
+        return try {
+            rotate(bitmap, degrees)
+        } catch (_: OutOfMemoryError) {
+            bitmap
+        } catch (_: IllegalArgumentException) {
+            bitmap
+        }
     }
 
     fun rotate(bitmap: Bitmap, degrees: Int): Bitmap {
@@ -98,19 +124,23 @@ object ImageEditing {
         }
     }
 
-    private fun decodeBytes(bytes: ByteArray, orientation: Int): Bitmap? {
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+    private fun uprighted(bitmap: Bitmap, orientation: Int): Bitmap {
+        val rotated = rotateOrSame(bitmap, orientation)
+        if (rotated !== bitmap) bitmap.recycle()
+        return rotated
+    }
+
+    private fun sampleFor(bounds: BitmapFactory.Options): Int {
         val longest = max(bounds.outWidth, bounds.outHeight).coerceAtLeast(1)
-        val sample = generateSequence(1) { it * 2 }
-            .first { longest / it <= MaxSide }
-        val bitmap = BitmapFactory.decodeByteArray(
-            bytes,
-            0,
-            bytes.size,
-            BitmapFactory.Options().apply { inSampleSize = sample }
-        ) ?: return null
-        return if (orientation == 0) bitmap else rotate(bitmap, orientation)
+        return generateSequence(1) { it * 2 }.first { longest / it <= MaxSide }
+    }
+
+    private inline fun safely(block: () -> Bitmap?): Bitmap? = try {
+        block()
+    } catch (_: Exception) {
+        null
+    } catch (_: OutOfMemoryError) {
+        null
     }
 
     private fun ExifInterface.rotationDegrees(): Int = when (

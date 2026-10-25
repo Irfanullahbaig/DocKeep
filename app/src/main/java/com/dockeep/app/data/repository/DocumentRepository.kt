@@ -10,6 +10,7 @@ import com.dockeep.app.domain.DefaultCategory
 import com.dockeep.app.domain.DocumentItem
 import com.dockeep.app.domain.ExpiryStatus
 import com.dockeep.app.domain.FileType
+import androidx.room.withTransaction
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
@@ -189,9 +190,12 @@ class DocumentRepository(
         categories: List<CategoryEntity>,
         documents: List<DocumentEntity>
     ) {
-        categoryDao.insertAll(categories)
-        documentDao.deleteAll()
-        documentDao.insertAll(documents)
+        // One transaction, so a bad backup can't leave the library half-wiped.
+        database.withTransaction {
+            categoryDao.insertAll(categories)
+            documentDao.deleteAll()
+            documentDao.insertAll(documents)
+        }
     }
 
     fun storageBytes(): Long = storage.totalBytes()

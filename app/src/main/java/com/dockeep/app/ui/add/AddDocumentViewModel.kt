@@ -132,6 +132,7 @@ class AddDocumentViewModel(
     fun onDoctorChange(value: String) = _uiState.update { it.copy(doctorName = value).withoutAuto("doctor") }
     fun onHospitalChange(value: String) = _uiState.update { it.copy(hospital = value).withoutAuto("hospital") }
     fun clearError() = _uiState.update { it.copy(error = null) }
+    fun showError(message: String) = _uiState.update { it.copy(error = message) }
 
     fun onFilePicked(uri: Uri, mime: String?) {
         val guessedName = _uiState.value.name.ifBlank {
@@ -356,6 +357,8 @@ class AddDocumentViewModel(
                     )
                 }
             }.onSuccess {
+                // The edited photo is now copied into private storage; drop the temp copy.
+                state.pendingFile?.let { runCatching { it.delete() } }
                 _uiState.update { it.copy(saving = false, saved = true) }
             }.onFailure { error ->
                 _uiState.update { it.copy(saving = false, error = error.message ?: "Could not save the document.") }
