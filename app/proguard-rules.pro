@@ -43,3 +43,9 @@
 
 -dontwarn com.google.mlkit.**
 -dontwarn com.google.android.gms.internal.mlkit_vision_text_common.**
+
+# ML Kit finds its components by class name and builds them by reflection.
+# Without these, TextRecognition.getClient() throws an NPE in release builds.
+-keep class * implements com.google.firebase.components.ComponentRegistrar { <init>(); *; }
+-keep class com.google.firebase.components.** { *; }
+-keep class com.google.mlkit.** { *; }
