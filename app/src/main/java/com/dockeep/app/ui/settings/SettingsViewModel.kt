@@ -63,7 +63,7 @@ class SettingsViewModel(
 
     fun setAppLock(enabled: Boolean) = viewModelScope.launch {
         settingsRepository.setAppLockEnabled(enabled)
-        if (enabled) appLockController.lockNow() else appLockController.markUnlocked()
+        appLockController.markUnlocked()
     }
 
     fun setBiometric(enabled: Boolean) = viewModelScope.launch {

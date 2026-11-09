@@ -57,9 +57,8 @@ import com.dockeep.app.domain.FileType
 import com.dockeep.app.ui.theme.Danger
 import com.dockeep.app.ui.theme.Warning
 import com.dockeep.app.util.toDisplayDate
+import com.dockeep.app.util.PdfGate
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import android.graphics.Bitmap
 import android.graphics.pdf.PdfRenderer
@@ -337,7 +336,6 @@ fun DocumentThumbnail(
     }
 }
 
-private val pdfRenderLock = Mutex()
 private const val MAX_PDF_EDGE = 1024
 
 @Composable
@@ -345,7 +343,7 @@ fun PdfFirstPage(file: File, modifier: Modifier = Modifier, contentScale: Conten
     var bitmap by remember(file.path) { mutableStateOf<Bitmap?>(null) }
     LaunchedEffect(file.path) {
         bitmap = withContext(Dispatchers.IO) {
-            pdfRenderLock.withLock {
+            PdfGate.withLock {
                 runCatching { renderPdfPreview(file) }.getOrNull()
             }
         }

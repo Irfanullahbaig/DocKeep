@@ -82,7 +82,7 @@ object ExpiryNotifications {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_dockeep_logo)
+            .setSmallIcon(R.drawable.ic_stat_dockeep)
             .setContentTitle("Document expiry")
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText("You have $text. Open DocKeep to review them. Nothing was sent off this device."))

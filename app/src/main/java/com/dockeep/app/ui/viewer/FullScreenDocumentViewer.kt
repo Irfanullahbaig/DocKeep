@@ -57,6 +57,7 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.dockeep.app.domain.DocumentItem
 import com.dockeep.app.domain.FileType
+import com.dockeep.app.util.PdfGate
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -79,7 +80,9 @@ fun FullScreenDocumentViewer(
 
     LaunchedEffect(file.path, document.fileType) {
         if (document.fileType == FileType.PDF) {
-            pageCount = withContext(Dispatchers.IO) { pdfPageCount(file) }.coerceAtLeast(1)
+            pageCount = withContext(Dispatchers.IO) {
+                PdfGate.withLock { pdfPageCount(file) }
+            }.coerceAtLeast(1)
         }
     }
 
@@ -148,12 +151,15 @@ private fun ZoomableImage(file: File, contentDescription: String) {
 private fun ZoomablePdfPage(file: File, pageIndex: Int, documentName: String) {
     var bitmap by remember(file.path, pageIndex) { mutableStateOf<Bitmap?>(null) }
     LaunchedEffect(file.path, pageIndex) {
-        bitmap = withContext(Dispatchers.IO) { renderPdfPage(file, pageIndex, scale = 2.5f) }
+        bitmap = withContext(Dispatchers.IO) {
+            PdfGate.withLock { renderPdfPage(file, pageIndex, scale = 2.5f) }
+        }
     }
     ZoomableContent {
-        if (bitmap != null) {
+        val page = bitmap
+        if (page != null) {
             Image(
-                bitmap = bitmap!!.asImageBitmap(),
+                bitmap = page.asImageBitmap(),
                 contentDescription = "$documentName page ${pageIndex + 1}",
                 contentScale = ContentScale.Fit,
                 modifier = Modifier.fillMaxSize()

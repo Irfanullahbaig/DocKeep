@@ -14,6 +14,8 @@ import androidx.room.withTransaction
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class DocumentRepository(
     private val database: AppDatabase,
@@ -21,11 +23,25 @@ class DocumentRepository(
 ) {
     private val categoryDao = database.categoryDao()
     private val documentDao = database.documentDao()
+    private val seedMutex = Mutex()
 
+    @Volatile
+    private var seeded = false
+
+    /**
+     * Makes sure the default categories exist. Safe to call from anywhere; runs the real work
+     * once per process, and saving a document waits for it so a fast first save can't fail
+     * the categoryId foreign key while the app is still starting.
+     */
     suspend fun seedIfNeeded() {
-        storage.ensureCategoryFolders()
-        categoryDao.insertMissing(AppDatabase.defaultCategories())
-        migrateLegacyCategories()
+        if (seeded) return
+        seedMutex.withLock {
+            if (seeded) return
+            storage.ensureCategoryFolders()
+            categoryDao.insertMissing(AppDatabase.defaultCategories())
+            migrateLegacyCategories()
+            seeded = true
+        }
     }
 
     private suspend fun migrateLegacyCategories() {
@@ -112,6 +128,7 @@ class DocumentRepository(
         notes: String?,
         imported: ImportedFile
     ) {
+        seedIfNeeded()
         val now = System.currentTimeMillis()
         documentDao.insert(
             DocumentEntity(
@@ -140,6 +157,7 @@ class DocumentRepository(
         expiryDate: Long?,
         notes: String?
     ) {
+        seedIfNeeded()
         val current = documentDao.getById(id) ?: return
         val path = if (current.categoryId != categoryId) {
             storage.moveToCategory(current.relativePath, id, categoryId)
@@ -191,11 +209,15 @@ class DocumentRepository(
         documents: List<DocumentEntity>
     ) {
         // One transaction, so a bad backup can't leave the library half-wiped.
-        database.withTransaction {
-            categoryDao.insertAll(categories)
-            documentDao.deleteAll()
-            documentDao.insertAll(documents)
+        seedMutex.withLock {
+            database.withTransaction {
+                categoryDao.insertAll(categories)
+                documentDao.deleteAll()
+                documentDao.insertAll(documents)
+            }
+            seeded = false
         }
+        seedIfNeeded()
     }
 
     fun storageBytes(): Long = storage.totalBytes()

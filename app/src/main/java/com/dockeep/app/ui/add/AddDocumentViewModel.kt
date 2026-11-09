@@ -8,6 +8,7 @@ import com.dockeep.app.data.repository.DocumentRepository
 import com.dockeep.app.data.storage.LocalFileStorage
 import com.dockeep.app.domain.Category
 import com.dockeep.app.domain.DefaultCategory
+import com.dockeep.app.domain.parseDocumentNotes
 import com.dockeep.app.ocr.DocumentOcrScanner
 import com.dockeep.app.ocr.OcrFieldKey
 import com.dockeep.app.ocr.OcrScanResult
@@ -17,6 +18,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -91,22 +94,27 @@ class AddDocumentViewModel(
         }
         if (editId != null) {
             viewModelScope.launch {
-                repository.observeDocument(editId).collect { doc ->
-                    if (doc != null) {
-                        _uiState.update {
-                            it.copy(
-                                name = doc.name,
-                                categoryId = doc.categoryId,
-                                documentNumber = doc.documentNumber.orEmpty(),
-                                issueDate = doc.issueDate,
-                                expiryDate = doc.expiryDate,
-                                notes = doc.notes.orEmpty(),
-                                hasFile = true,
-                                existingPath = doc.relativePath,
-                                existingMime = doc.mimeType
-                            )
-                        }
-                    }
+                val doc = repository.observeDocument(editId).filterNotNull().first()
+                val parsed = parseDocumentNotes(doc.notes)
+                _uiState.update {
+                    it.copy(
+                        name = doc.name,
+                        categoryId = doc.categoryId,
+                        documentNumber = doc.documentNumber.orEmpty(),
+                        issueDate = doc.issueDate,
+                        expiryDate = doc.expiryDate,
+                        notes = parsed.notes,
+                        fatherName = parsed.fatherName,
+                        dateOfBirth = parsed.dateOfBirth,
+                        phoneNumber = parsed.phoneNumber,
+                        chassisNumber = parsed.chassisNumber,
+                        engineNumber = parsed.engineNumber,
+                        doctorName = parsed.doctorName,
+                        hospital = parsed.hospital,
+                        hasFile = true,
+                        existingPath = doc.relativePath,
+                        existingMime = doc.mimeType
+                    )
                 }
             }
         }

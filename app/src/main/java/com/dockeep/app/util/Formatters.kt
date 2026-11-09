@@ -12,6 +12,13 @@ private val displayDate: DateTimeFormatter =
 fun Long.toDisplayDate(): String =
     Instant.ofEpochMilli(this).atZone(ZoneOffset.UTC).toLocalDate().format(displayDate)
 
+fun parseDisplayDate(value: String): Long? = runCatching {
+    LocalDate.parse(value.trim(), displayDate)
+        .atStartOfDay(ZoneOffset.UTC)
+        .toInstant()
+        .toEpochMilli()
+}.getOrNull()
+
 fun Long.toLocalDate(): LocalDate =
     Instant.ofEpochMilli(this).atZone(ZoneOffset.UTC).toLocalDate()
 

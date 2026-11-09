@@ -17,7 +17,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-enum class ExpiryChip { ALL, EXPIRING, EXPIRED }
+enum class ExpiryChip { ALL, EXPIRING, EXPIRED, DUE }
 
 data class AllDocumentsUiState(
     val query: String = "",
@@ -39,7 +39,7 @@ class AllDocumentsViewModel(
     private val selectedTypeId: MutableStateFlow<String?>
     private val expiryChip = MutableStateFlow(
         when (savedStateHandle.get<String>("expiry")) {
-            "soon" -> ExpiryChip.EXPIRING
+            "soon" -> ExpiryChip.DUE
             "expired" -> ExpiryChip.EXPIRED
             else -> ExpiryChip.ALL
         }
@@ -76,13 +76,19 @@ class AllDocumentsViewModel(
                 ExpiryChip.ALL -> true
                 ExpiryChip.EXPIRING -> doc.expiryStatus == ExpiryStatus.EXPIRING_SOON
                 ExpiryChip.EXPIRED -> doc.expiryStatus == ExpiryStatus.EXPIRED
+                ExpiryChip.DUE ->
+                    doc.expiryStatus == ExpiryStatus.EXPIRING_SOON || doc.expiryStatus == ExpiryStatus.EXPIRED
             }
             matchesQuery && matchesGroup && matchesType && matchesExpiry
         }
         val group = groupId?.let(DocumentGroup::fromId)
         AllDocumentsUiState(
             query = q,
-            title = group?.displayName ?: "All documents",
+            title = when {
+                expiry == ExpiryChip.DUE -> "Expiring & expired"
+                group != null -> group.displayName
+                else -> "All documents"
+            },
             selectedGroupId = groupId,
             selectedTypeId = typeId,
             expiryChip = expiry,

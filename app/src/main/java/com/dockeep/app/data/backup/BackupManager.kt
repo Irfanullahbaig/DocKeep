@@ -102,19 +102,32 @@ class BackupManager(
                     if (entity.categoryId in categoryIds) entity else entity.copy(categoryId = DefaultCategory.default.id)
                 }
 
-            storage.deleteAllDocuments()
+            // Assemble the new library next to the staging area, then swap it in. The current
+            // library is kept as a rollback copy until the database has been updated too, so a
+            // failure at any point leaves the user's existing documents untouched.
+            val newRoot = File(context.cacheDir, "restore-root").apply {
+                deleteRecursively()
+                mkdirs()
+            }
             documents.forEach { document ->
                 val source = File(staging, document.relativePath)
                 if (!isInside(staging, source) || !source.exists()) return@forEach
-                val dest = storage.fileFor(document.relativePath)
+                val dest = File(newRoot, document.relativePath)
                 dest.parentFile?.mkdirs()
                 if (!source.renameTo(dest)) source.copyTo(dest, overwrite = true)
             }
-            repository.restore(categories = categories, documents = documents)
-            repository.seedIfNeeded()
+            storage.replaceDocumentTree(newRoot)
+            try {
+                repository.restore(categories = categories, documents = documents)
+                storage.discardDocumentRollback()
+            } catch (error: Exception) {
+                storage.rollbackDocuments()
+                throw error
+            }
             storage.ensureCategoryFolders()
         } finally {
             staging.deleteRecursively()
+            File(context.cacheDir, "restore-root").deleteRecursively()
         }
     }
 }

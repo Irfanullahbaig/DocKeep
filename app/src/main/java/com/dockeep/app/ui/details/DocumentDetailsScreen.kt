@@ -261,7 +261,8 @@ fun DocumentDetailsScreen(
         )
     }
 
-    if (fullscreen && document != null) {
+    val openDocument = document
+    if (fullscreen && openDocument != null) {
         Dialog(
             onDismissRequest = { fullscreen = false },
             properties = DialogProperties(
@@ -272,8 +273,8 @@ fun DocumentDetailsScreen(
             )
         ) {
             FullScreenDocumentViewer(
-                document = document!!,
-                file = viewModel.fileFor(document!!),
+                document = openDocument,
+                file = viewModel.fileFor(openDocument),
                 onClose = { fullscreen = false }
             )
         }
@@ -360,10 +361,14 @@ private fun share(context: android.content.Context, file: java.io.File, document
     if (!file.exists()) throw IllegalStateException("File missing")
     val uri: Uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
     val intent = Intent(Intent.ACTION_SEND).apply {
-        type = document.mimeType
+        type = document.mimeType.ifBlank { "application/octet-stream" }
         putExtra(Intent.EXTRA_STREAM, uri)
         putExtra(Intent.EXTRA_SUBJECT, document.name)
+        // Some receivers read the stream from clipData rather than the extra; cover both.
+        clipData = android.content.ClipData.newRawUri(document.name, uri)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
-    context.startActivity(Intent.createChooser(intent, "Share ${document.name}"))
+    val chooser = Intent.createChooser(intent, "Share ${document.name}")
+        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    context.startActivity(chooser)
 }

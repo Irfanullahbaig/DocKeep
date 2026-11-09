@@ -10,22 +10,25 @@ import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import com.dockeep.app.domain.AppSettings
 import com.dockeep.app.domain.AutoLockTimeout
+import java.util.concurrent.atomic.AtomicBoolean
 
 class BiometricAuthenticator(private val activity: FragmentActivity) {
-    private val manager = BiometricManager.from(activity)
+    private val prompting = AtomicBoolean(false)
 
     fun canAuthenticate(allowBiometric: Boolean = true): Boolean {
-        val authenticators = authenticators(allowBiometric)
-        return manager.canAuthenticate(authenticators) == BiometricManager.BIOMETRIC_SUCCESS
+        return enrollmentStatus(allowBiometric) == AuthAvailability.READY
     }
 
     fun enrollmentStatus(allowBiometric: Boolean = true): AuthAvailability {
-        return when (manager.canAuthenticate(authenticators(allowBiometric))) {
-            BiometricManager.BIOMETRIC_SUCCESS -> AuthAvailability.READY
-            BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED -> AuthAvailability.NONE_ENROLLED
-            BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE,
-            BiometricManager.BIOMETRIC_ERROR_HW_UNAVAILABLE -> AuthAvailability.UNAVAILABLE
-            else -> AuthAvailability.UNAVAILABLE
+        return try {
+            val manager = BiometricManager.from(activity)
+            when (manager.canAuthenticate(authenticators(manager, allowBiometric))) {
+                BiometricManager.BIOMETRIC_SUCCESS -> AuthAvailability.READY
+                BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED -> AuthAvailability.NONE_ENROLLED
+                else -> AuthAvailability.UNAVAILABLE
+            }
+        } catch (_: RuntimeException) {
+            AuthAvailability.UNAVAILABLE
         }
     }
 
@@ -41,19 +44,22 @@ class BiometricAuthenticator(private val activity: FragmentActivity) {
             onError("Unable to authenticate right now.")
             return
         }
+        if (!prompting.compareAndSet(false, true)) return
         val callback = object : BiometricPrompt.AuthenticationCallback() {
             override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                prompting.set(false)
                 onSuccess()
             }
 
             override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                prompting.set(false)
                 if (errorCode == BiometricPrompt.ERROR_USER_CANCELED ||
                     errorCode == BiometricPrompt.ERROR_NEGATIVE_BUTTON ||
                     errorCode == BiometricPrompt.ERROR_CANCELED
                 ) {
                     onFailed()
                 } else {
-                    onError(errString.toString())
+                    onError(errString.toString().ifBlank { "Authentication isn’t available on this device." })
                 }
             }
 
@@ -65,6 +71,7 @@ class BiometricAuthenticator(private val activity: FragmentActivity) {
             val prompt = BiometricPrompt(activity, ContextCompat.getMainExecutor(activity), callback)
             prompt.authenticate(promptInfo(title, subtitle, allowBiometric))
         } catch (error: RuntimeException) {
+            prompting.set(false)
             onError(error.message ?: "Authentication isn’t available on this device.")
         }
     }
@@ -74,40 +81,82 @@ class BiometricAuthenticator(private val activity: FragmentActivity) {
         subtitle: String,
         allowBiometric: Boolean
     ): BiometricPrompt.PromptInfo {
+        val manager = BiometricManager.from(activity)
+        val plan = authPromptPlan(
+            sdkAtLeastR = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R,
+            allowBiometric = allowBiometric,
+            canStrongAndDevice = can(manager, BIOMETRIC_STRONG or DEVICE_CREDENTIAL),
+            canDevice = can(manager, DEVICE_CREDENTIAL),
+            canStrong = can(manager, BIOMETRIC_STRONG),
+            canWeak = can(manager, BIOMETRIC_WEAK)
+        )
         val builder = BiometricPrompt.PromptInfo.Builder()
             .setTitle(title)
             .setSubtitle(subtitle)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val authenticators = authenticators(allowBiometric)
-            builder.setAllowedAuthenticators(authenticators)
-            if (authenticators and DEVICE_CREDENTIAL == 0) {
-                builder.setNegativeButtonText("Cancel")
-            }
-        } else {
-            if (allowBiometric) {
-                builder.setAllowedAuthenticators(BIOMETRIC_WEAK)
-            }
+        if (plan.useLegacyDeviceCredential) {
             @Suppress("DEPRECATION")
             builder.setDeviceCredentialAllowed(true)
+        } else {
+            builder.setAllowedAuthenticators(plan.authenticators)
+            plan.negativeButtonText?.let(builder::setNegativeButtonText)
         }
         return builder.build()
     }
 
-    private fun authenticators(allowBiometric: Boolean): Int {
-        if (!allowBiometric) return DEVICE_CREDENTIAL
-        val strongAndDevice = BIOMETRIC_STRONG or DEVICE_CREDENTIAL
-        return when {
-            manager.canAuthenticate(strongAndDevice) == BiometricManager.BIOMETRIC_SUCCESS ->
-                strongAndDevice
-            manager.canAuthenticate(DEVICE_CREDENTIAL) == BiometricManager.BIOMETRIC_SUCCESS ->
-                DEVICE_CREDENTIAL
-            manager.canAuthenticate(BIOMETRIC_STRONG) == BiometricManager.BIOMETRIC_SUCCESS ->
-                BIOMETRIC_STRONG
-            manager.canAuthenticate(BIOMETRIC_WEAK) == BiometricManager.BIOMETRIC_SUCCESS ->
-                BIOMETRIC_WEAK
-            else -> DEVICE_CREDENTIAL
-        }
+    private fun authenticators(manager: BiometricManager, allowBiometric: Boolean): Int {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return BIOMETRIC_WEAK
+        return authPromptPlan(
+            sdkAtLeastR = true,
+            allowBiometric = allowBiometric,
+            canStrongAndDevice = can(manager, BIOMETRIC_STRONG or DEVICE_CREDENTIAL),
+            canDevice = can(manager, DEVICE_CREDENTIAL),
+            canStrong = can(manager, BIOMETRIC_STRONG),
+            canWeak = can(manager, BIOMETRIC_WEAK)
+        ).authenticators
     }
+
+    private fun can(manager: BiometricManager, authenticators: Int): Boolean {
+        return runCatching {
+            manager.canAuthenticate(authenticators) == BiometricManager.BIOMETRIC_SUCCESS
+        }.getOrDefault(false)
+    }
+}
+
+internal data class AuthPromptPlan(
+    val authenticators: Int,
+    val useLegacyDeviceCredential: Boolean,
+    val negativeButtonText: String?
+)
+
+internal fun authPromptPlan(
+    sdkAtLeastR: Boolean,
+    allowBiometric: Boolean,
+    canStrongAndDevice: Boolean,
+    canDevice: Boolean,
+    canStrong: Boolean,
+    canWeak: Boolean
+): AuthPromptPlan {
+    if (!sdkAtLeastR) {
+        return AuthPromptPlan(
+            authenticators = 0,
+            useLegacyDeviceCredential = true,
+            negativeButtonText = null
+        )
+    }
+    val authenticators = when {
+        !allowBiometric -> DEVICE_CREDENTIAL
+        canStrongAndDevice -> BIOMETRIC_STRONG or DEVICE_CREDENTIAL
+        canDevice -> DEVICE_CREDENTIAL
+        canStrong -> BIOMETRIC_STRONG
+        canWeak -> BIOMETRIC_WEAK
+        else -> DEVICE_CREDENTIAL
+    }
+    val negative = if (authenticators and DEVICE_CREDENTIAL == 0) "Cancel" else null
+    return AuthPromptPlan(
+        authenticators = authenticators,
+        useLegacyDeviceCredential = false,
+        negativeButtonText = negative
+    )
 }
 
 enum class AuthAvailability {
@@ -116,7 +165,9 @@ enum class AuthAvailability {
     UNAVAILABLE
 }
 
-class AppLockController {
+class AppLockController(
+    private val now: () -> Long = { System.currentTimeMillis() }
+) {
     @Volatile
     var unlockedInSession: Boolean = false
         private set
@@ -134,7 +185,7 @@ class AppLockController {
 
     fun lockNow() {
         unlockedInSession = false
-        lastBackgroundAt = System.currentTimeMillis()
+        lastBackgroundAt = now()
     }
 
     /**
@@ -143,7 +194,7 @@ class AppLockController {
      * lock (and throw away the screen waiting for the result) while the user takes a photo.
      */
     fun expectExternalActivity() {
-        externalActivityStartedAt = System.currentTimeMillis()
+        externalActivityStartedAt = now()
     }
 
     fun cancelExternalActivity() {
@@ -151,7 +202,7 @@ class AppLockController {
     }
 
     fun onBackground() {
-        lastBackgroundAt = System.currentTimeMillis()
+        lastBackgroundAt = now()
     }
 
     fun shouldLock(settings: AppSettings): Boolean {
@@ -160,7 +211,7 @@ class AppLockController {
         val external = externalActivityStartedAt
         if (external != null) {
             externalActivityStartedAt = null
-            if (System.currentTimeMillis() - external < ExternalActivityGraceMillis) {
+            if (now() - external < ExternalActivityGraceMillis) {
                 lastBackgroundAt = null
                 return false
             }
@@ -170,7 +221,7 @@ class AppLockController {
             AutoLockTimeout.IMMEDIATE -> lastBackgroundAt != null
             else -> {
                 val backgrounded = lastBackgroundAt ?: return false
-                System.currentTimeMillis() - backgrounded >= settings.autoLockTimeout.millis
+                now() - backgrounded >= settings.autoLockTimeout.millis
             }
         }
     }

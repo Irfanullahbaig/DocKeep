@@ -137,15 +137,18 @@ fun AllDocumentsScreen(
                     }
                 }
             }
-            if (state.visible.isEmpty()) {
+                if (state.visible.isEmpty()) {
                 EmptyState(
                     icon = Icons.Rounded.SearchOff,
                     title = "No matching documents",
-                    message = "Try another search or clear the filters."
+                    message = "Try another search or clear the filters.",
+                    modifier = Modifier.weight(1f)
                 )
             } else {
                 LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
                     contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 96.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {

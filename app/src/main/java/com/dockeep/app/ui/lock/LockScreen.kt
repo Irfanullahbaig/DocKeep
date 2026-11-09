@@ -30,6 +30,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import com.dockeep.app.security.AuthAvailability
 import com.dockeep.app.ui.components.DocKeepBrand
+import kotlinx.coroutines.delay
 
 @Composable
 fun LockScreen(
@@ -44,6 +45,7 @@ fun LockScreen(
         if (availability != AuthAvailability.READY) return@LaunchedEffect
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             if (!launched) {
+                delay(300)
                 launched = true
                 onUnlock()
             }

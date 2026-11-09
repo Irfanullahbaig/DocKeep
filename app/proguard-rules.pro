@@ -1,8 +1,6 @@
 # Play Console DEX scores require R8 shrinking, optimization, and obfuscation.
 # Keep only reflective or generated entry points. Do not keep the whole app package.
 
--repackageclasses
-
 # kotlinx.serialization backup models are decoded from JSON at runtime.
 -keepattributes RuntimeVisibleAnnotations,AnnotationDefault,*Annotation*
 -keepclassmembers class com.dockeep.app.data.backup.BackupPayload {

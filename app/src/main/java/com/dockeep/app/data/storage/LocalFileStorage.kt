@@ -8,6 +8,7 @@ import com.dockeep.app.domain.FileType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.IOException
 import java.util.UUID
 
 class LocalFileStorage(private val context: Context) {
@@ -34,7 +35,39 @@ class LocalFileStorage(private val context: Context) {
     fun categoryDir(categoryId: String): File =
         File(documentsRoot, DefaultCategory.fromId(categoryId).folderName).apply { mkdirs() }
 
-    fun fileFor(relativePath: String): File = File(documentsRoot, relativePath)
+    fun fileFor(relativePath: String): File {
+        val safe = normalizeSafeRelativePath(relativePath) ?: return File(documentsRoot, ".missing")
+        return File(documentsRoot, safe)
+    }
+
+    fun replaceDocumentTree(staging: File) {
+        val root = documentsRoot
+        val rollback = File(context.filesDir, "Documents.rollback")
+        rollback.deleteRecursively()
+        if (root.exists() && !moveTree(root, rollback)) {
+            throw IOException("Could not prepare storage for restore.")
+        }
+        if (!moveTree(staging, root)) {
+            if (rollback.exists()) moveTree(rollback, root)
+            throw IOException("Could not restore document files.")
+        }
+    }
+
+    fun discardDocumentRollback() {
+        File(context.filesDir, "Documents.rollback").deleteRecursively()
+    }
+
+    fun rollbackDocuments() {
+        val root = documentsRoot
+        val rollback = File(context.filesDir, "Documents.rollback")
+        if (!rollback.exists()) return
+        root.deleteRecursively()
+        if (!moveTree(rollback, root)) {
+            rollback.copyRecursively(root, overwrite = true)
+            rollback.deleteRecursively()
+        }
+        ensureCategoryFolders()
+    }
 
     /** True when the path stays inside DocKeep's documents folder (guards against "../" in backups). */
     fun isSafeRelativePath(relativePath: String): Boolean =
@@ -43,7 +76,7 @@ class LocalFileStorage(private val context: Context) {
     /** Deletes leftover camera shots and crop edits older than a day; they're copies of documents. */
     fun clearStaleTemps(maxAgeMillis: Long = 24 * 60 * 60_000L) {
         val cutoff = System.currentTimeMillis() - maxAgeMillis
-        listOf("captures", "edits", "imports", "restore").forEach { name ->
+        listOf("captures", "edits", "imports", "ocr", "restore", "restore-root").forEach { name ->
             File(context.cacheDir, name).listFiles()?.forEach { file ->
                 if (file.lastModified() < cutoff) runCatching { file.deleteRecursively() }
             }
@@ -140,6 +173,16 @@ class LocalFileStorage(private val context: Context) {
             ?: "application/octet-stream"
     }
 
+    private fun moveTree(from: File, to: File): Boolean {
+        if (to.exists()) to.deleteRecursively()
+        if (from.renameTo(to)) return true
+        return runCatching {
+            from.copyRecursively(to, overwrite = true)
+            from.deleteRecursively()
+            true
+        }.getOrDefault(false)
+    }
+
     private fun extensionFor(mimeType: String, uri: Uri?): String {
         if (mimeType == "application/pdf") return "pdf"
         MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType)?.let { return it }
@@ -147,6 +190,16 @@ class LocalFileStorage(private val context: Context) {
         if (!fromUri.isNullOrBlank() && fromUri.length <= 4) return fromUri
         return "jpg"
     }
+}
+
+internal fun normalizeSafeRelativePath(path: String): String? {
+    val trimmed = path.trim()
+    if (trimmed.isBlank() || trimmed.startsWith("/") || trimmed.startsWith("\\")) return null
+    val cleaned = trimmed.replace('\\', '/')
+    if (cleaned.isBlank()) return null
+    val parts = cleaned.split('/')
+    if (parts.any { it.isBlank() || it == "." || it == ".." }) return null
+    return parts.joinToString("/")
 }
 
 data class ImportedFile(
